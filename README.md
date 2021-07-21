@@ -18,4 +18,15 @@ The file "Villin_training_with_experimental_observables.ipynb" covers:
 4. Train a revDMSM without further information of the true values
 5. Train a revDMSM with further knowledge of the true values, where it can be switched between three classes of observables
 
+In order to run the code the following package are required:
+- Python 3
+- Jupyter Notebook or Jupyter Lab
+- NumPy
+- Matplotlib
+- PyTorch
+For saving representative structures 
+- MDTraj
+For initializing the coarse-graining matrices
+-PyEMMA
 
+The authors aim to update the code to be compatible with the deeptime package (see https://deeptime-ml.github.io/latest/index.html)
