@@ -1,4 +1,13 @@
 # deepmsm
+
+UPDATE:
+
+A new example code was added to build your own deep reversible hierarchical MSM with attention mechanism:
+"Attention_and_coarse_graining.ipynb".
+The code there needs additionally the deeptime package and represents a pre-alpha version how the code will
+be integrated into deeptime (see https://deeptime-ml.github.io/latest/index.html). 
+
+
 Code to reproduce results for the paper: Progress in deep Markov State Modeling: Coarse graining and experimental data restraints
 
 The code is presented in two notebooks and a helper file network.py and is applied for the Villin dataset. 
