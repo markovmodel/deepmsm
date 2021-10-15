@@ -283,3 +283,193 @@ def plot_cg(layer):
     plt.xlabel('From State', fontsize=18)
     plt.ylabel('To State', fontsize=18)
     plt.show()
+    
+    
+def estimate_mu(mu, chi_true, frames):
+    ''' Estimates the state probability of a reference model. The stationary distribution
+    mu is estimated from the current model, but the state assignment stems from the
+    reference model. This makes it comparable over several models.
+    '''
+    state_prob = np.sum(mu * chi_true[frames], axis=0)
+#     plt.plot(state_prob, '.')
+#     plt.show()
+    return state_prob
+
+
+
+
+
+class TimeSeriesDataset(object):
+    r""" High-level container for time-series data.
+    This can be used together with pytorch data tools, i.e., data loaders and other utilities.
+
+    Parameters
+    ----------
+    data : (T, ...) ndarray
+        The dataset with T frames.
+    """
+
+    def __init__(self, data):
+        self.data = data
+
+    def lag(self, lagtime: int):
+        r""" Creates a time lagged dataset out of this one.
+
+        Parameters
+        ----------
+        lagtime : int
+            The lagtime, must be positive.
+
+        Returns
+        -------
+        dataset : TimeLaggedDataset
+            Time lagged dataset.
+        """
+        return TimeLaggedDataset.from_trajectory(lagtime, self.data)
+
+    def __getitem__(self, item):
+        return self.data[item]
+
+    def __len__(self):
+        return len(self.data)
+
+
+class TimeLaggedDataset(TimeSeriesDataset):
+    r""" High-level container for time-lagged time-series data.
+    This can be used together with pytorch data tools, i.e., data loaders and other utilities.
+
+    Parameters
+    ----------
+    data : iterable of data
+        The data which is wrapped into a dataset
+    data_lagged : iterable of data
+        Corresponding timelagged data. Must be of same length.
+    dtype : numpy data type
+        The data type to map to when retrieving outputs
+    """
+
+    def __init__(self, data, data_lagged, dtype=np.float32):
+        super().__init__(data)
+        assert len(data) == len(data_lagged), 'data and data lagged must be of same size'
+        self.data_lagged = data_lagged
+        self.dtype = dtype
+
+    @staticmethod
+    def from_trajectory(lagtime: int, data: np.ndarray):
+        r""" Creates a time series dataset from a single trajectory by applying a lagtime.
+
+        Parameters
+        ----------
+        lagtime : int
+            Lagtime, must be positive. The effective size of the dataset reduces by the selected lagtime.
+        data : (T, d) ndarray
+            Trajectory with T frames in d dimensions.
+
+        Returns
+        -------
+        dataset : TimeSeriesDataset
+            The resulting time series dataset.
+        """
+        assert lagtime > 0, "Lagtime must be positive"
+        return TimeLaggedDataset(data[:-lagtime], data[lagtime:], dtype=data.dtype)
+
+    def __getitem__(self, item):
+        return self.data[item].astype(self.dtype), self.data_lagged[item].astype(self.dtype)
+
+    def __len__(self):
+        return len(self.data)
+
+    
+class TimeLaggedDatasetObs(TimeSeriesDataset):
+    r""" High-level container for time-lagged time-series data.
+    This can be used together with pytorch data tools, i.e., data loaders and other utilities.
+
+    Parameters
+    ----------
+    data : iterable of data
+        The data which is wrapped into a dataset
+    data_lagged : iterable of data
+        Corresponding timelagged data. Must be of same length.
+    data_obs_ev: iterable of data
+        Corresponding microscopic observable of type expectation value
+    data_obs_ac: iterable of data
+        Corresponding microscopic observable of type auto correlation
+    dtype : numpy data type
+        The data type to map to when retrieving outputs
+    """
+
+    def __init__(self, data, data_lagged, data_obs_ev=None, data_obs_ac=None, dtype=np.float32):
+        super().__init__(data)
+        assert len(data) == len(data_lagged), 'data and data lagged must be of same size'
+        self.data_lagged = data_lagged
+        self.data_obs_ev = data_obs_ev
+        self.data_obs_ac = data_obs_ac
+        self.dtype = dtype
+
+    @staticmethod
+    def from_trajectory(lagtime: int, data: np.ndarray, data_obs_ev: np.ndarray=None, data_obs_ac: np.ndarray=None):
+        r""" Creates a time series dataset from a single trajectory by applying a lagtime.
+
+        Parameters
+        ----------
+        lagtime : int
+            Lagtime, must be positive. The effective size of the dataset reduces by the selected lagtime.
+        data : (T, d) ndarray
+            Trajectory with T frames in d dimensions.
+        data_obs_ev : (T, n) ndarray
+            Trajectory of n microscopic observables with T frames. 
+        data_obs_ac : (T, n) ndarray
+            Trajectory of n microscopic observables with T frames. 
+
+        Returns
+        -------
+        dataset : TimeLaggedDatasetObs
+            The resulting time series dataset.
+        """
+        assert lagtime > 0, "Lagtime must be positive"
+        if data_obs_ev is not None:
+            data_obs_ev = data_obs_ev[lagtime:]
+        if data_obs_ac is not None:
+            data_obs_ac = data_obs_ac[lagtime:]
+        return TimeLaggedDatasetObs(data[:-lagtime], data[lagtime:], data_obs_ev, data_obs_ac, dtype=data.dtype)
+    
+    @staticmethod
+    def from_frames(lagtime: int, data: np.ndarray, frames: np.ndarray, 
+                    data_obs_ev: np.ndarray=None, data_obs_ac: np.ndarray=None):
+        r""" Creates a time series dataset from a single trajectory by applying a lagtime.
+
+        Parameters
+        ----------
+        lagtime : int
+            Lagtime, must be positive. The effective size of the dataset reduces by the selected lagtime.
+        data : (T, d) ndarray
+            Trajectory with T frames in d dimensions.
+        data_obs_ev : (T, n) ndarray
+            Trajectory of n microscopic observables with T frames. 
+        data_obs_ac : (T, n) ndarray
+            Trajectory of n microscopic observables with T frames. 
+
+        Returns
+        -------
+        dataset : TimeLaggedDatasetObs
+            The resulting time series dataset.
+        """
+        assert lagtime > 0, "Lagtime must be positive"
+        if data_obs_ev is not None:
+            data_obs_ev = data_obs_ev[frames+lagtime]
+        if data_obs_ac is not None:
+            data_obs_ac = data_obs_ac[frames+lagtime]
+        return TimeLaggedDatasetObs(data[frames], data[frames+lagtime], data_obs_ev, data_obs_ac, dtype=data.dtype)
+    
+    def __getitem__(self, item):
+        if self.data_obs_ev is not None and self.data_obs_ac is not None:
+            return self.data[item].astype(self.dtype), self.data_lagged[item].astype(self.dtype), self.data_obs_ev[item].astype(self.dtype), self.data_obs_ac[item].astype(self.dtype)
+        elif self.data_obs_ev is not None:
+            return self.data[item].astype(self.dtype), self.data_lagged[item].astype(self.dtype), self.data_obs_ev[item].astype(self.dtype)
+        elif self.data_obs_ac is not None:
+            return self.data[item].astype(self.dtype), self.data_lagged[item].astype(self.dtype), self.data_obs_ac[item].astype(self.dtype)
+        else:
+            return self.data[item].astype(self.dtype), self.data_lagged[item].astype(self.dtype)
+
+    def __len__(self):
+        return len(self.data)

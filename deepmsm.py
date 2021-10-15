@@ -12,6 +12,7 @@ from deeptime.base_torch import DLEstimatorMixin
 from deeptime.util.torch import map_data
 from deeptime.markov.tools.analysis import pcca_memberships
 
+CLIP_VALUE = 1.
 
 def symeig_reg(mat, epsilon: float = 1e-6, mode='regularize', eigenvectors=True) \
         -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
@@ -710,6 +711,14 @@ class DeepMSMModel(Transformer, Model):
             out.append(net(self.mask(data_tensor)).cpu().numpy())
         return out if len(out) > 1 else out[0]
     
+    def get_mu(self, data_t):
+        self._lobe.eval()
+        net = self._lobe
+        with torch.no_grad():
+            x_t = net(self.mask(torch.Tensor(data_t).to(self._device)))
+            mu = self._ulayer(x_t, x_t, return_mu=True)[-1] # use dummy x_0
+        return mu.detach().to('cpu').numpy()
+    
     def get_transition_matrix(self, data_0, data_t):
         self._lobe.eval()
         net = self._lobe
@@ -776,11 +785,11 @@ class DeepMSMModel(Transformer, Model):
         with torch.no_grad():
             x_0 = net(self.mask(torch.Tensor(data_0).to(self._device)))
             x_t = net(self.mask(torch.Tensor(data_t).to(self._device)))
-            output_u = self.ulayer(x_0, x_t, return_mu=return_mu)
+            output_u = self._ulayer(x_0, x_t, return_mu=return_mu)
             if return_mu:
                 mu = output_u[5]
             Sigma = output_u[4]
-            output_S = self.slayer(*output_u[:5], return_K=return_K, return_S=return_S)
+            output_S = self._slayer(*output_u[:5], return_K=return_K, return_S=return_S)
             if return_K:
                 K = output_S[1]
             if return_S:
@@ -789,14 +798,14 @@ class DeepMSMModel(Transformer, Model):
             if data_ev is not None:
                 x_ev = torch.Tensor(data_ev).to(self._device)
                 ev_est = obs_ev(x_ev,mu)
-                ret.append(ev_est)
+                ret.append(ev_est.detach().to('cpu').numpy())
             if data_ac is not None:
                 x_ac = torch.Tensor(data_ac).to(self._device)
                 ac_est = obs_ac(x_ac, mu, x_t, K, Sigma)
-                ret.append(ac_est)
+                ret.append(ac_est.detach().to('cpu').numpy())
             if state1 is not None:
                 its_est = get_process_eigval(S, Sigma, state1, state2, epsilon=self._epsilon, mode=self._mode)
-                ret.append(its_est)
+                ret.append(its_est.detach().to('cpu').numpy())
         return ret
 
 class DeepMSM(DLEstimatorMixin, Transformer):
@@ -887,8 +896,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
         self.optimizer_u = torch.optim.Adam(self.ulayer.parameters(), lr=self.learning_rate*10)
         self.optimizer_s = torch.optim.Adam(self.slayer.parameters(), lr=self.learning_rate*100)
         self.optimizer_lobe = torch.optim.Adam(self.lobe.parameters(), lr=self.learning_rate)
-        self.optimimzer_all = torch.optim.Adam(chain(self.ulayer.parameters(), self.slayer.parameters(), self.lobe.parameters()), 
-                                              lr=self.learning_rate)
+        self.optimimzer_all = torch.optim.Adam(chain(self.ulayer.parameters(), self.slayer.parameters(), self.lobe.parameters()), lr=self.learning_rate)
         self._train_scores = []
         self._validation_scores = []
         self._train_vampe = []
@@ -1075,6 +1083,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
         
         loss_value = -vampe_loss_rev(x_0, x_t, self.ulayer, self.slayer)[0]
         loss_value.backward()
+        torch.nn.utils.clip_grad_norm_(chain(self.lobe.parameters(), self.mask.parameters(), self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
         if self.mask is not None and mask:
             self.optimizer_mask.step()
         self.optimizer_lobe.step()
@@ -1194,6 +1203,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
     
                     loss_value = -vampe_loss_rev(x_0, x_t, self.ulayer, self.slayer)[0]
                     loss_value.backward()
+                    torch.nn.utils.clip_grad_norm_(chain(self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
                     self.optimizer_u.step()
                     if train_mode=='us':
                         self.optimizer_s.step()
@@ -1224,6 +1234,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     
                     loss_value = -vampe_loss_rev_only_S(v, C_00, C_11, C_01, Sigma, self.slayer)[0]
                     loss_value.backward()
+                    torch.nn.utils.clip_grad_norm_(self.slayer.parameters(), CLIP_VALUE)
                     self.optimizer_s.step()
 
                     if train_score_callback is not None:
@@ -1355,6 +1366,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 score = vampe_loss_rev(x_0, x_t, self.ulayer, self.slayer)[0]
                 loss_value = -score
                 loss_value.backward()
+                torch.nn.utils.clip_grad_norm_(chain(self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
                 self.optimizer_u.step()
                 self.optimizer_s.step()
                 if (score-score_value_before) < rel and counter > 0:
@@ -1455,6 +1467,9 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     loss_value += torch.trace(matrix_cg)
                     
                 loss_value.backward()
+                torch.nn.utils.clip_grad_norm_(chain(self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
+                for lay_cg in self.cg_list:
+                    torch.nn.utils.clip_grad_norm_(lay_cg.parameters(), CLIP_VALUE)
                 self.optimizer_u.step()
                 self.optimizer_s.step()
                 for opt in self.cg_opt_list:
@@ -1503,6 +1518,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 matrix_cg = self.cg_list[idx].get_cg_uS(chi_t, chi_tau, u_n, S_n, return_chi=False)[0]
                 loss_value = torch.trace(matrix_cg)
                 loss_value.backward()
+                torch.nn.utils.clip_grad_norm_(self.cg_list[idx].parameters(), CLIP_VALUE)
                 self.cg_opt_list[idx].step()
                 
                 if train_score_callback is not None:
@@ -1634,6 +1650,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
             loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
             loss_value += loss_its
         loss_value.backward()
+        torch.nn.utils.clip_grad_norm_(chain(self.lobe.parameters(), self.mask.parameters(), self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
         self.optimizer_lobe.step()
         self.optimizer_u.step()
         self.optimizer_s.step()
@@ -1989,6 +2006,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                             for i in range(est_its.shape[0]):
                                 tb_writer.add_scalars('ITS', {'train_'+str(i+1): est_its[i].item()}, self._step)
                     loss_value.backward()
+                    torch.nn.utils.clip_grad_norm_(chain(self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
                     self.optimizer_u.step()
                     if train_mode=='us':
                         self.optimizer_s.step()
@@ -2082,6 +2100,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                             for i in range(est_its.shape[0]):
                                 tb_writer.add_scalars('ITS', {'train_'+str(i+1): est_its[i].item()}, self._step)
                     loss_value.backward()
+                    torch.nn.utils.clip_grad_norm_(self.slayer.parameters(), CLIP_VALUE)
                     self.optimizer_s.step()
 
                     if train_score_callback is not None:
