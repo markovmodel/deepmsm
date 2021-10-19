@@ -2,10 +2,14 @@
 
 UPDATE:
 
-A new example code was added to build your own deep reversible hierarchical MSM with attention mechanism:
+New example code was added to build your own deep reversible hierarchical MSM with attention mechanism:
 "Attention_and_coarse_graining.ipynb".
+and your deep reversible MSM with additional experimental values:
+"Observable_training.ipynb"
 The code there needs additionally the deeptime package and represents a pre-alpha version how the code will
-be integrated into deeptime (see https://deeptime-ml.github.io/latest/index.html). 
+be integrated into deeptime (see https://deeptime-ml.github.io/latest/index.html). It also includes the functionality to
+monitor the performance of the model during the training via tensorboard. If you wanna use the feature you need to install
+it too.
 
 
 Code to reproduce results for the paper: Progress in deep Markov State Modeling: Coarse graining and experimental data restraints

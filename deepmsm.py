@@ -1037,6 +1037,10 @@ class DeepMSM(DLEstimatorMixin, Transformer):
             data = data.to(device=self.device)
         
         return self.lobe(self.mask(data))
+    
+    def reset_scores(self):
+        self._train_scores = []
+        self._validation_scores = []
                                               
     def partial_fit(self, data, mask: bool = False, train_score_callback: Callable[[int, torch.Tensor], None] = None,
                    tb_writer=None):
@@ -1331,7 +1335,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
             for g in self.optimizer_s.param_groups:
                 g['lr'] = lr_s/2
             counter = 0
-            print('Score before loop', score_value_before.item())
+#             print('Score before loop', score_value_before.item())
             if reset_u:
                 cov_00, cov_0t, cov_tt = covariances(x_0, x_t, remove_mean=False)
                 cov_00_inv = sym_inverse(cov_00, epsilon=self.epsilon, mode=self.score_mode).to('cpu').numpy()
@@ -1344,10 +1348,10 @@ class DeepMSM(DLEstimatorMixin, Transformer):
 
                 pi_vec = np.real(eigvec[:,ind_pi])
                 pi = pi_vec / np.sum(pi_vec, keepdims=True)
-                print('pi', pi)
+#                 print('pi', pi)
                 # reverse the consruction of u 
                 u_optimal = cov_00_inv @ pi
-                print('u optimal', u_optimal)
+#                 print('u optimal', u_optimal)
 
                 # u_kernel = np.log(np.exp(np.abs(u_optimal))-1) # if softplus
                 # for relu
@@ -1373,10 +1377,10 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     flag=False
                 counter+=1
                 if counter > max_iter:
-                    print('Reached max number of iterations')
+#                     print('Reached max number of iterations')
                     flag=False
                 score_value_before = score
-            print('and after: ', score.item())   
+#             print('and after: ', score.item())   
             if validation_loader is not None:
                 with torch.no_grad():
                     scores = []
@@ -1546,7 +1550,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
         return self
     
     def partial_fit_obs(self, data, data_ev, data_ac, exp_ev=None, exp_ac=None, exp_its=None,
-                                    lam_ev=None, lam_ac=None, lam_its=None, 
+                                    xi_ev=None, xi_ac=None, xi_its=None, 
                                     its_state1=None, its_state2=None, mask=False,
                         train_score_callback: Callable[[int, torch.Tensor], None] = None, tb_writer=None):
         r""" Performs a partial fit on data. This does not perform any batching.
@@ -1594,8 +1598,8 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 batch_ev = torch.from_numpy(data_ev.astype(self.dtype)).to(device=self.device)
             if isinstance(exp_ev, np.ndarray):
                 exp_ev = torch.from_numpy(exp_ev.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ev, np.ndarray):
-                lam_ev = torch.from_numpy(lam_ev.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ev, np.ndarray):
+                xi_ev = torch.from_numpy(xi_ev.astype(self.dtype)).to(device=self.device)
         if exp_ac is not None:
             return_mu = True
             return_K = True
@@ -1605,15 +1609,15 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 batch_ac = torch.from_numpy(data_ac.astype(self.dtype)).to(device=self.device)
             if isinstance(exp_ac, np.ndarray):
                 exp_ac = torch.from_numpy(exp_ac.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ac, np.ndarray):
-                lam_ac = torch.from_numpy(lam_ac.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ac, np.ndarray):
+                xi_ac = torch.from_numpy(xi_ac.astype(self.dtype)).to(device=self.device)
         if exp_its is not None:
             return_S = True
             return_Sigma =True
             if isinstance(exp_its, np.ndarray):
                 exp_its = torch.from_numpy(exp_its.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_its, np.ndarray):
-                lam_its = torch.from_numpy(lam_its.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_its, np.ndarray):
+                xi_its = torch.from_numpy(xi_its.astype(self.dtype)).to(device=self.device)
                 
         
         self.optimizer_lobe.zero_grad()
@@ -1641,13 +1645,13 @@ class DeepMSM(DLEstimatorMixin, Transformer):
         if return_Sigma:
             Sigma = output_loss[-1]
         if exp_ev is not None:
-            loss_ev, est_ev = obs_ev_loss(batch_ev, mu, exp_ev, lam_ev)
+            loss_ev, est_ev = obs_ev_loss(batch_ev, mu, exp_ev, xi_ev)
             loss_value += loss_ev
         if exp_ac is not None:
-            loss_ac, est_ac = obs_ac_loss(batch_ac, mu, x_t, K, Sigma, exp_ac, lam_ac)
+            loss_ac, est_ac = obs_ac_loss(batch_ac, mu, x_t, K, Sigma, exp_ac, xi_ac)
             loss_value += loss_ac
         if exp_its is not None:
-            loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+            loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
             loss_value += loss_its
         loss_value.backward()
         torch.nn.utils.clip_grad_norm_(chain(self.lobe.parameters(), self.mask.parameters(), self.ulayer.parameters(), self.slayer.parameters()), CLIP_VALUE)
@@ -1686,7 +1690,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                                               
     def validate_obs(self, validation_data: Tuple[torch.Tensor], val_data_ev=None, val_data_ac=None,
                     exp_ev=None, exp_ac=None, exp_its=None,
-                    lam_ev=None, lam_ac=None, lam_its=None, 
+                    xi_ev=None, xi_ac=None, xi_its=None, 
                     its_state1=None, its_state2=None) -> torch.Tensor:
         r""" Evaluates the currently set lobe(s) on validation data and returns the value of the configured score.
 
@@ -1713,8 +1717,8 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 batch_ev = torch.from_numpy(val_data_ev.astype(self.dtype)).to(device=self.device)
             if isinstance(exp_ev, np.ndarray):
                 exp_ev = torch.from_numpy(exp_ev.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ev, np.ndarray):
-                lam_ev = torch.from_numpy(lam_ev.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ev, np.ndarray):
+                xi_ev = torch.from_numpy(xi_ev.astype(self.dtype)).to(device=self.device)
         if exp_ac is not None:
             return_mu = True
             return_K = True
@@ -1724,15 +1728,15 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                 batch_ac = torch.from_numpy(val_data_ac.astype(self.dtype)).to(device=self.device)
             if isinstance(exp_ac, np.ndarray):
                 exp_ac = torch.from_numpy(exp_ac.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ac, np.ndarray):
-                lam_ac = torch.from_numpy(lam_ac.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ac, np.ndarray):
+                xi_ac = torch.from_numpy(xi_ac.astype(self.dtype)).to(device=self.device)
         if exp_its is not None:
             return_S = True
             return_Sigma =True
             if isinstance(exp_its, np.ndarray):
                 exp_its = torch.from_numpy(exp_its.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_its, np.ndarray):
-                lam_its = torch.from_numpy(lam_its.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_its, np.ndarray):
+                xi_its = torch.from_numpy(xi_its.astype(self.dtype)).to(device=self.device)
         with torch.no_grad():
             val = self.forward(validation_data[0])
             val_t = self.forward(validation_data[1])
@@ -1753,15 +1757,15 @@ class DeepMSM(DLEstimatorMixin, Transformer):
             if return_Sigma:
                 Sigma = output_loss[-1]
             if exp_ev is not None:
-                loss_ev, est_ev = obs_ev_loss(batch_ev, mu, exp_ev, lam_ev)
+                loss_ev, est_ev = obs_ev_loss(batch_ev, mu, exp_ev, xi_ev)
                 score_value += loss_ev
                 ret.append(est_ev)
             if exp_ac is not None:
-                loss_ac, est_ac = obs_ac_loss(batch_ac, mu, val_t, K, Sigma, exp_ac, lam_ac)
+                loss_ac, est_ac = obs_ac_loss(batch_ac, mu, val_t, K, Sigma, exp_ac, xi_ac)
                 score_value += loss_ac
                 ret.append(est_ac)
             if exp_its is not None:
-                loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+                loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
                 score_value += loss_its
                 ret.append(est_its)
             return ret
@@ -1769,7 +1773,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                                               
     def fit_obs(self, data_loader: torch.utils.data.DataLoader, n_epochs=1, validation_loader=None,
             train_mode = 'all', exp_ev=None, exp_ac=None, exp_its=None,
-            lam_ev=None, lam_ac=None, lam_its=None, its_state1=None, its_state2=None, mask=False,
+            xi_ev=None, xi_ac=None, xi_its=None, its_state1=None, its_state2=None, mask=False,
             train_score_callback: Callable[[int, torch.Tensor], None] = None,
             validation_score_callback: Callable[[int, torch.Tensor], None] = None, tb_writer=None, **kwargs):
         r""" Fits a VampNet on data.
@@ -1806,30 +1810,30 @@ class DeepMSM(DLEstimatorMixin, Transformer):
         if exp_ev is not None:
             if isinstance(exp_ev, list):
                 exp_ev = np.array(exp_ev)
-            if isinstance(lam_ev, list):
-                lam_ev = np.array(lam_ev)
+            if isinstance(xi_ev, list):
+                xi_ev = np.array(xi_ev)
             if isinstance(exp_ev, np.ndarray):
                 exp_ev = torch.from_numpy(exp_ev.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ev, np.ndarray):
-                lam_ev = torch.from_numpy(lam_ev.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ev, np.ndarray):
+                xi_ev = torch.from_numpy(xi_ev.astype(self.dtype)).to(device=self.device)
         if exp_ac is not None:
             if isinstance(exp_ac, list):
                 exp_ac = np.array(exp_ac)
-            if isinstance(lam_ac, list):
-                lam_ac = np.array(lam_ac)
+            if isinstance(xi_ac, list):
+                xi_ac = np.array(xi_ac)
             if isinstance(exp_ac, np.ndarray):
                 exp_ac = torch.from_numpy(exp_ac.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_ac, np.ndarray):
-                lam_ac = torch.from_numpy(lam_ac.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_ac, np.ndarray):
+                xi_ac = torch.from_numpy(xi_ac.astype(self.dtype)).to(device=self.device)
         if exp_its is not None:
             if isinstance(exp_its, list):
                 exp_its = np.array(exp_its)
-            if isinstance(lam_its, list):
-                lam_its = np.array(lam_its)
+            if isinstance(xi_its, list):
+                xi_its = np.array(xi_its)
             if isinstance(exp_its, np.ndarray):
                 exp_its = torch.from_numpy(exp_its.astype(self.dtype)).to(device=self.device)
-            if isinstance(lam_its, np.ndarray):
-                lam_its = torch.from_numpy(lam_its.astype(self.dtype)).to(device=self.device)
+            if isinstance(xi_its, np.ndarray):
+                xi_its = torch.from_numpy(xi_its.astype(self.dtype)).to(device=self.device)
         # and train
         if train_mode=='all':
             for epoch in range(n_epochs):
@@ -1846,7 +1850,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     self.partial_fit_obs((batch_0, batch_t),
                                          data_ev=batch_ev, data_ac=batch_ac,
                                      exp_ev=exp_ev, exp_ac=exp_ac, exp_its=exp_its,
-                                     lam_ev=lam_ev, lam_ac=lam_ac, lam_its=lam_its, 
+                                     xi_ev=xi_ev, xi_ac=xi_ac, xi_its=xi_its, 
                                      its_state1=its_state1, its_state2=its_state2, mask=mask,
                                      train_score_callback=train_score_callback, tb_writer=tb_writer)
                 if validation_loader is not None:
@@ -1873,7 +1877,7 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                             all_scores= self.validate_obs((val_batch[0].to(device=self.device), val_batch[1].to(device=self.device)),
                                              val_data_ev=data_val_ev, val_data_ac=data_val_ac,
                                              exp_ev=exp_ev, exp_ac=exp_ac, exp_its=exp_its,
-                                             lam_ev=lam_ev, lam_ac=lam_ac, lam_its=lam_its, 
+                                             xi_ev=xi_ev, xi_ac=xi_ac, xi_its=xi_its, 
                                              its_state1=its_state1, its_state2=its_state2)
                             scores.append(all_scores[0])
                             scores_vampe.append(all_scores[1])
@@ -1985,21 +1989,21 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     if return_Sigma:
                         Sigma = output_loss[-1]
                     if exp_ev is not None:
-                        loss_ev, est_ev = obs_ev_loss(x_ev, mu, exp_ev, lam_ev) 
+                        loss_ev, est_ev = obs_ev_loss(x_ev, mu, exp_ev, xi_ev) 
                         loss_value += loss_ev
                         self._train_ev.append(np.concatenate(([self._step], (est_ev).detach().to('cpu').numpy())))
                         if tb_writer is not None:
                             for i in range(est_ev.shape[0]):
                                 tb_writer.add_scalars('EV', {'train_'+str(i+1): est_ev[i].item()}, self._step)
                     if exp_ac is not None:
-                        loss_ac, est_ac = obs_ac_loss(x_ac, mu, x_t, K, Sigma, exp_ac, lam_ac) 
+                        loss_ac, est_ac = obs_ac_loss(x_ac, mu, x_t, K, Sigma, exp_ac, xi_ac) 
                         loss_value += loss_ac
                         self._train_ac.append(np.concatenate(([self._step], (est_ac).detach().to('cpu').numpy())))
                         if tb_writer is not None:
                             for i in range(est_ac.shape[0]):
                                 tb_writer.add_scalars('AC', {'train_'+str(i+1): est_ac[i].item()}, self._step)
                     if exp_its is not None:
-                        loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+                        loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
                         loss_value += loss_its
                         self._train_its.append(np.concatenate(([self._step], (est_its).detach().to('cpu').numpy())))
                         if tb_writer is not None:
@@ -2037,21 +2041,21 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                             if return_Sigma:
                                 Sigma = output_loss[-1]
                             if exp_ev is not None:
-                                loss_ev, est_ev = obs_ev_loss(x_val_ev, mu, exp_ev, lam_ev)
+                                loss_ev, est_ev = obs_ev_loss(x_val_ev, mu, exp_ev, xi_ev)
                                 score_val += loss_ev
                                 self._validation_ev.append(np.concatenate(([self._step], (est_ev).detach().to('cpu').numpy())))
                                 if tb_writer is not None:
                                     for i in range(est_ev.shape[0]):
                                         tb_writer.add_scalars('EV', {'valid_'+str(i+1): est_ev[i].item()}, self._step)
                             if exp_ac is not None:
-                                loss_ac, est_ac = obs_ac_loss(x_val_ac, mu, x_val_t, K, Sigma, exp_ac, lam_ac)
+                                loss_ac, est_ac = obs_ac_loss(x_val_ac, mu, x_val_t, K, Sigma, exp_ac, xi_ac)
                                 score_val += loss_ac
                                 self._validation_ac.append(np.concatenate(([self._step], (est_ac).detach().to('cpu').numpy())))
                                 if tb_writer is not None:
                                     for i in range(est_ac.shape[0]):
                                         tb_writer.add_scalars('AC', {'valid_'+str(i+1): est_ac[i].item()}, self._step)
                             if exp_its is not None:
-                                loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+                                loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
                                 score_val += loss_its
                                 self._validation_its.append(np.concatenate(([self._step], (est_its).detach().to('cpu').numpy())))
                                 if tb_writer is not None:
@@ -2086,14 +2090,14 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                     if return_S:
                         S = output_loss[-1]
                     if exp_ac is not None:
-                        loss_ac, est_ac = obs_ac_loss(x_ac, mu, x_t, K, Sigma, exp_ac, lam_ac)
+                        loss_ac, est_ac = obs_ac_loss(x_ac, mu, x_t, K, Sigma, exp_ac, xi_ac)
                         loss_value += loss_ac
                         self._train_ac.append(np.concatenate(([self._step], (est_ac).detach().to('cpu').numpy())))
                         if tb_writer is not None:
                             for i in range(est_ac.shape[0]):
                                 tb_writer.add_scalars('AC', {'train_'+str(i+1): est_ac[i].item()}, self._step)
                     if exp_its is not None:
-                        loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+                        loss_its, est_its = obs_its_loss(S, Sigma, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
                         loss_value += loss_its
                         self._train_its.append(np.concatenate(([self._step], (est_its).detach().to('cpu').numpy())))
                         if tb_writer is not None:
@@ -2121,14 +2125,14 @@ class DeepMSM(DLEstimatorMixin, Transformer):
                             if return_S:
                                 S = output_loss[-1]
                             if exp_ac is not None:
-                                loss_ac, est_ac = obs_ac_loss(x_val_ac, mu_val, x_val_t, K, Sigma_val, exp_ac, lam_ac)
+                                loss_ac, est_ac = obs_ac_loss(x_val_ac, mu_val, x_val_t, K, Sigma_val, exp_ac, xi_ac)
                                 score_val += loss_ac
                                 self._validation_ac.append(np.concatenate(([self._step], (est_ac).detach().to('cpu').numpy())))
                                 if tb_writer is not None:
                                     for i in range(est_ac.shape[0]):
                                         tb_writer.add_scalars('AC', {'valid_'+str(i+1): est_ac[i].item()}, self._step)
                             if exp_its is not None:
-                                loss_its, est_its = obs_its_loss(S, Sigma_val, its_state1, its_state2, exp_its, lam_its, epsilon=self.epsilon, mode=self.score_mode)
+                                loss_its, est_its = obs_its_loss(S, Sigma_val, its_state1, its_state2, exp_its, xi_its, epsilon=self.epsilon, mode=self.score_mode)
                                 score_val += loss_its
                                 self._validation_its.append(np.concatenate(([self._step], (est_its).detach().to('cpu').numpy())))
                                 if tb_writer is not None:
@@ -2190,10 +2194,10 @@ class DeepMSM(DLEstimatorMixin, Transformer):
 
         pi_vec = np.real(eigvec[:,ind_pi])
         pi = pi_vec / np.sum(pi_vec, keepdims=True)
-        print('pi', pi)
+#         print('pi', pi)
         # reverse the consruction of u 
         u_optimal = cov_00_inv @ pi
-        print('u optimal', u_optimal)
+#         print('u optimal', u_optimal)
         
         # u_kernel = np.log(np.exp(np.abs(u_optimal))-1) # if softplus
         # for relu
@@ -2267,24 +2271,30 @@ class DeepMSM(DLEstimatorMixin, Transformer):
             self.optimizer_u = torch.optim.Adam(self.ulayer.parameters(), lr=self.learning_rate*10)
             self.optimizer_s = torch.optim.Adam(self.slayer.parameters(), lr=self.learning_rate*100)
     
-#     def reset_u_S(self):
+    def reset_u_S_wo(self):
         
         
-#         u_kernel = np.ones(self.output_dim)
+        u_kernel = np.ones(self.output_dim)
         
-#         with torch.no_grad():
-#             for param in self.ulayer.parameters():
+        with torch.no_grad():
+            for param in self.ulayer.parameters():
             
-#                 param.copy_(torch.Tensor(u_kernel[None,:]))  
-#         S_kernel = np.ones((self.output_dim, self.output_dim))
-#         with torch.no_grad():
-#             for param in self.slayer.parameters():
+                param.copy_(torch.Tensor(u_kernel[None,:]))  
+        S_kernel = np.ones((self.output_dim, self.output_dim))
+        with torch.no_grad():
+            for param in self.slayer.parameters():
 
-#                 param.copy_(torch.Tensor(S_kernel))
+                param.copy_(torch.Tensor(S_kernel))
     
     def reset_opt_u_S(self, lr=1):
-        self.optimizer_u = torch.optim.Adam(self.ulayer.parameters(), lr=self.learning_rate*lr)
-        self.optimizer_s = torch.optim.Adam(self.slayer.parameters(), lr=self.learning_rate*10*lr)
+        self.optimizer_u = torch.optim.Adam(self.ulayer.parameters(), lr=self.learning_rate*10*lr)
+        self.optimizer_s = torch.optim.Adam(self.slayer.parameters(), lr=self.learning_rate*100*lr)
+        
+    def reset_opt_all(self, lr=1):
+        self.optimizer_lobe = torch.optim.Adam(self.lobe.parameters(), lr=self.learning_rate*lr)
+        self.optimimzer_all = torch.optim.Adam(chain(self.ulayer.parameters(), self.slayer.parameters(), self.lobe.parameters()), lr=self.learning_rate*lr)
+        self.optimizer_u = torch.optim.Adam(self.ulayer.parameters(), lr=self.learning_rate*10*lr)
+        self.optimizer_s = torch.optim.Adam(self.slayer.parameters(), lr=self.learning_rate*100*lr)
         
     def initialize_cg_layer(self, idx: int, data_loader: torch.utils.data.DataLoader, factor: float = 1.0):
 
